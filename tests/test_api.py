@@ -41,37 +41,38 @@ async def test_get_robot_invalid_id(async_client: AsyncClient):
 
 
 def test_websocket_robots_connect_and_disconnect():
-    """Test WebSocket endpoint /ws/robots receives snapshot frame and closes cleanly."""
-    client = TestClient(app)
-    with client.websocket_connect("/ws/robots") as websocket:
-        data = websocket.receive_json()
-        assert isinstance(data, list)
-        assert len(data) == 2
-        robot_ids = [r["robot_id"] for r in data]
-        assert "robot_001" in robot_ids
+    """Test WebSocket endpoint /ws/robots registers with ConnectionManager and cleans up on close."""
+    from app.websocket import manager
+    with patch("app.main.fleet_broadcast_worker", new_callable=AsyncMock):
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/robots"):
+                # While connected the manager should have exactly one active connection
+                assert len(manager.active_connections) == 1
+            # After disconnect the manager should have cleaned up
+            assert len(manager.active_connections) == 0
 
 
 @pytest.mark.asyncio
 async def test_websocket_robots_disconnect_handling():
-    """Test WebSocketDisconnect handling in websocket endpoint."""
+    """Test WebSocketDisconnect is caught and manager.disconnect is called."""
     mock_ws = AsyncMock()
     mock_ws.accept = AsyncMock()
-    mock_ws.send_json = AsyncMock(side_effect=WebSocketDisconnect(code=1000))
+    mock_ws.receive_text = AsyncMock(side_effect=WebSocketDisconnect(code=1000))
 
-    # Should handle WebSocketDisconnect without throwing
-    await websocket_fleet_endpoint(mock_ws)
-    mock_ws.accept.assert_called_once()
-    mock_ws.send_json.assert_called_once()
+    with patch("app.main.manager.connect", new_callable=AsyncMock):
+        with patch("app.main.manager.disconnect", new_callable=AsyncMock) as mock_disconnect:
+            await websocket_fleet_endpoint(mock_ws)
+            mock_disconnect.assert_called_once_with(mock_ws)
 
 
 @pytest.mark.asyncio
 async def test_websocket_robots_generic_exception_handling():
-    """Test generic exception handling in websocket endpoint."""
+    """Test unexpected exceptions are caught and manager.disconnect is still called."""
     mock_ws = AsyncMock()
     mock_ws.accept = AsyncMock()
-    mock_ws.send_json = AsyncMock(side_effect=RuntimeError("Simulated network error"))
+    mock_ws.receive_text = AsyncMock(side_effect=RuntimeError("Simulated network error"))
 
-    # Should catch Exception, log warning, and return cleanly
-    await websocket_fleet_endpoint(mock_ws)
-    mock_ws.accept.assert_called_once()
-    mock_ws.send_json.assert_called_once()
+    with patch("app.main.manager.connect", new_callable=AsyncMock):
+        with patch("app.main.manager.disconnect", new_callable=AsyncMock) as mock_disconnect:
+            await websocket_fleet_endpoint(mock_ws)
+            mock_disconnect.assert_called_once_with(mock_ws)

@@ -1,27 +1,29 @@
 import asyncio
-from contextlib import asynccontextmanager
 import logging
+from contextlib import asynccontextmanager
+from json import dumps
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 
 from app.consumer import start_consumer
 from app.state import fleet_state
+from app.websocket import manager
 
 logger = logging.getLogger("fleet_api")
 logging.basicConfig(level=logging.INFO)
 
 
 async def stale_robot_watcher():
-    """Periodically sweeps robots and flags them as stale if silent."""
+    """Periodically sweeps robots and flags them as offline if silent."""
     while True:
         try:
-            stale_robots = await fleet_state.check_and_mark_stale(
+            offline_robots = await fleet_state.check_and_mark_stale(
                 timeout_seconds=5.0
             )
-            if stale_robots:
+            if offline_robots:
                 logger.info(
-                    "Robots marked stale (no heartbeat): %s", stale_robots
+                    "Robots marked offline (no heartbeat): %s", offline_robots
                 )
             await asyncio.sleep(1.0)
         except asyncio.CancelledError:
@@ -35,6 +37,7 @@ async def stale_robot_watcher():
 async def lifespan(app: FastAPI):
     consumer_task = asyncio.create_task(start_consumer())
     watcher_task = asyncio.create_task(stale_robot_watcher())
+    broadcast_task = asyncio.create_task(fleet_broadcast_worker())
     logger.info("Background tasks initiated.")
 
     yield
@@ -42,9 +45,25 @@ async def lifespan(app: FastAPI):
     logger.info("Canceling background tasks...")
     consumer_task.cancel()
     watcher_task.cancel()
-    await asyncio.gather(consumer_task, watcher_task, return_exceptions=True)
+    broadcast_task.cancel()
+    await asyncio.gather(consumer_task, watcher_task, broadcast_task, return_exceptions=True)
     logger.info("Background tasks cleanly terminated.")
 
+# Fetch Fleet State Periodically and broadcast it to all active WebSocket Clients
+async def fleet_broadcast_worker():
+    while True:
+        try:
+            # Only serialize and send if at least one client is connected
+            if manager.active_connections:
+                robots = await fleet_state.get_all_robots()
+                payload = dumps(robots)
+                await manager.broadcast(payload)
+            await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error("Error in fleet broadcast worker: %s", e)
+            await asyncio.sleep(0.5)
 
 app = FastAPI(
     title="Fleet Telemetry Backend",
@@ -71,17 +90,12 @@ async def get_robot(robot_id: str) -> dict[str, Any]:
 
 @app.websocket("/ws/robots")
 async def websocket_fleet_endpoint(websocket: WebSocket):
-    await websocket.accept()
+    await manager.connect(websocket)
     logger.info("Client connected to /ws/robots")
 
     try:
         while True:
-            snapshot = await fleet_state.get_all_robots()
-            await websocket.send_json(snapshot)
-            await asyncio.sleep(0.5)
-    except WebSocketDisconnect:
-        logger.info("Client disconnected from /ws/robots.")
-    except Exception as e:
-        logger.warning(
-            "WebSocket client connection closed with exception: %s", e
-        )
+            await websocket.receive_text()
+    except (WebSocketDisconnect, Exception):
+        await manager.disconnect(websocket)
+        logger.info("Client disconnected from WebSocket")

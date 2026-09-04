@@ -96,7 +96,7 @@ async def test_brand_new_robot_id(isolated_state: FleetState):
 
 @pytest.mark.asyncio
 async def test_check_and_mark_stale(isolated_state: FleetState):
-    """Test check_and_mark_stale transitions inactive robots and skips stale/offline ones."""
+    """Test check_and_mark_stale transitions inactive robots to offline and skips already-offline ones."""
     # Set up robot_001 last_seen_at in the past
     async with isolated_state._lock:
         isolated_state._robots["robot_001"]["last_seen_at"] = time.monotonic() - 10.0
@@ -109,9 +109,9 @@ async def test_check_and_mark_stale(isolated_state: FleetState):
     assert "robot_002" not in stale_ids  # Already offline, so skipped
 
     r1 = await isolated_state.get_robot("robot_001")
-    assert r1["status"] == "stale"
+    assert r1["status"] == "offline"
 
-    # Second check should skip robot_001 since status is now stale
+    # Second check should skip robot_001 since status is now offline
     stale_ids_2 = await isolated_state.check_and_mark_stale(timeout_seconds=5.0)
     assert "robot_001" not in stale_ids_2
 

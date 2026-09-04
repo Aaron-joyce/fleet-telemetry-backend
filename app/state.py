@@ -82,18 +82,18 @@ class FleetState:
         self, timeout_seconds: float = 5.0
     ) -> list[str]:
         now = time.monotonic()
-        stale_ids: list[str] = []
+        offline_ids: list[str] = []
 
         async with self._lock:
             for robot_id, robot in self._robots.items():
                 if (
-                    robot.get("status") not in ("stale", "offline")
+                    robot.get("status") != "offline"
                     and (now - robot.get("last_seen_at", now)) > timeout_seconds
                 ):
-                    robot["status"] = "stale"
-                    stale_ids.append(robot_id)
+                    robot["status"] = "offline"
+                    offline_ids.append(robot_id)
 
-        return stale_ids
+        return offline_ids
 
     async def get_all_robots(self) -> list[dict[str, Any]]:
         async with self._lock:

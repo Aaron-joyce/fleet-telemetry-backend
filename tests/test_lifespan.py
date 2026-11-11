@@ -32,12 +32,14 @@ async def test_stale_robot_watcher_sweeps_stale_robots():
     with patch.object(
         fleet_state, "check_and_mark_stale", new_callable=AsyncMock
     ) as mock_check:
-        mock_check.return_value = ["robot_001"]
+        mock_check.return_value = (["robot_001"], [])
         # Raise CancelledError during sleep to terminate the while True loop after 1 iteration
         with patch("asyncio.sleep", side_effect=asyncio.CancelledError()):
             await stale_robot_watcher()
 
-        mock_check.assert_called_once_with(timeout_seconds=5.0)
+        mock_check.assert_called_once_with(
+            timeout_seconds=5.0, eviction_ttl_seconds=300.0
+        )
 
 
 @pytest.mark.asyncio
@@ -45,14 +47,18 @@ async def test_stale_robot_watcher_exception_handling():
     """Test stale_robot_watcher handles unexpected exceptions gracefully."""
     call_count = 0
 
-    async def mock_check_with_error(timeout_seconds=5.0):
+    async def mock_check_with_error(
+        timeout_seconds=5.0, eviction_ttl_seconds=300.0
+    ):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             raise RuntimeError("Database read failure")
         raise asyncio.CancelledError()
 
-    with patch.object(fleet_state, "check_and_mark_stale", side_effect=mock_check_with_error):
+    with patch.object(
+        fleet_state, "check_and_mark_stale", side_effect=mock_check_with_error
+    ):
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             await stale_robot_watcher()
             mock_sleep.assert_called_once_with(1.0)
@@ -160,16 +166,34 @@ async def test_stale_watcher_resumes_after_grace_period():
     with patch.object(
         fleet_state, "check_and_mark_stale", new_callable=AsyncMock
     ) as mock_check:
-        mock_check.return_value = []
+        mock_check.return_value = ([], [])
         with patch("asyncio.sleep", side_effect=asyncio.CancelledError()):
             await stale_robot_watcher()
 
-    mock_check.assert_called_once_with(timeout_seconds=5.0)
+    mock_check.assert_called_once_with(
+        timeout_seconds=5.0, eviction_ttl_seconds=300.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_robot_watcher_logs_evictions():
+    """Test E: stale_robot_watcher logs evicted robots."""
+    with patch.object(
+        fleet_state, "check_and_mark_stale", new_callable=AsyncMock
+    ) as mock_check:
+        mock_check.return_value = ([], ["robot_ghost"])
+        with patch("app.main.logger.info") as mock_logger:
+            with patch("asyncio.sleep", side_effect=asyncio.CancelledError()):
+                await stale_robot_watcher()
+
+        mock_logger.assert_called_once()
+        log_message = mock_logger.call_args[0][0]
+        assert "evicted" in log_message
 
 
 @pytest.mark.asyncio
 async def test_health_endpoint_returns_broker_state(async_client):
-    """Test E: Health endpoint returns status and broker connection state."""
+    """Test Health endpoint returns status and broker connection state."""
     from app.broker_state import broker_state
 
     broker_state.set_connected(True)

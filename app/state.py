@@ -41,6 +41,7 @@ class FleetState:
                     "last_seen_at": now,
                     "session_id": meta.get("session_id"),
                     "dropped_frames": int(meta.get("dropped_frames", 0)),
+                    "offline_since": meta.get("offline_since"),
                 }
 
     async def update_robot(
@@ -64,6 +65,14 @@ class FleetState:
                     return False
 
                 # Accept: either newer t within same session, or new session entirely
+                new_status = telemetry.get("status")
+                if not new_status:
+                    new_status = (
+                        "active"
+                        if current.get("status") == "offline"
+                        else current.get("status", "active")
+                    )
+
                 current.update(
                     {
                         "x": float(telemetry.get("x", current["x"])),
@@ -71,10 +80,11 @@ class FleetState:
                         "battery": float(
                             telemetry.get("battery", current["battery"])
                         ),
-                        "status": telemetry.get("status", current["status"]),
+                        "status": new_status,
                         "t": incoming_t,
                         "last_seen_at": now,
                         "session_id": incoming_session,
+                        "offline_since": None,
                     }
                 )
             else:
@@ -89,25 +99,45 @@ class FleetState:
                     "last_seen_at": now,
                     "session_id": incoming_session,
                     "dropped_frames": 0,
+                    "offline_since": None,
                 }
             return True
 
     async def check_and_mark_stale(
-        self, timeout_seconds: float = 5.0
-    ) -> list[str]:
+        self,
+        timeout_seconds: float = 5.0,
+        eviction_ttl_seconds: float = 300.0,
+    ) -> tuple[list[str], list[str]]:
+        """Returns (newly_offline_ids, evicted_ids)."""
         now = time.monotonic()
         offline_ids: list[str] = []
+        evicted_ids: list[str] = []
+        to_evict: list[str] = []
 
         async with self._lock:
             for robot_id, robot in self._robots.items():
-                if (
-                    robot.get("status") != "offline"
-                    and (now - robot.get("last_seen_at", now)) > timeout_seconds
-                ):
-                    robot["status"] = "offline"
-                    offline_ids.append(robot_id)
+                status = robot.get("status")
 
-        return offline_ids
+                if status != "offline":
+                    # Check if newly stale
+                    if (now - robot.get("last_seen_at", now)) > timeout_seconds:
+                        robot["status"] = "offline"
+                        robot["offline_since"] = now
+                        offline_ids.append(robot_id)
+                else:
+                    # Already offline — check eviction TTL
+                    offline_since = robot.get("offline_since")
+                    if (
+                        offline_since
+                        and (now - offline_since) > eviction_ttl_seconds
+                    ):
+                        to_evict.append(robot_id)
+
+            for robot_id in to_evict:
+                del self._robots[robot_id]
+                evicted_ids.append(robot_id)
+
+        return offline_ids, evicted_ids
 
     async def get_all_robots(self) -> list[dict[str, Any]]:
         async with self._lock:
@@ -136,6 +166,7 @@ class FleetState:
                         "last_seen_at": now,
                         "session_id": meta.get("session_id"),
                         "dropped_frames": int(meta.get("dropped_frames", 0)),
+                        "offline_since": meta.get("offline_since"),
                     }
 
 

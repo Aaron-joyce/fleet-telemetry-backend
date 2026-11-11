@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from json import dumps
@@ -16,6 +17,7 @@ logger = logging.getLogger("fleet_api")
 logging.basicConfig(level=logging.INFO)
 
 RECONNECT_GRACE_SECONDS = 10.0  # pause stale-marking after broker reconnect
+OFFLINE_EVICTION_TTL = float(os.getenv("OFFLINE_EVICTION_TTL_SECONDS", 300.0))
 
 
 async def stale_robot_watcher():
@@ -41,12 +43,18 @@ async def stale_robot_watcher():
                 await asyncio.sleep(1.0)
                 continue
 
-            offline_robots = await fleet_state.check_and_mark_stale(
-                timeout_seconds=5.0
+            offline_robots, evicted_robots = await fleet_state.check_and_mark_stale(
+                timeout_seconds=5.0,
+                eviction_ttl_seconds=OFFLINE_EVICTION_TTL,
             )
             if offline_robots:
                 logger.info(
                     "Robots marked offline (no heartbeat): %s", offline_robots
+                )
+            if evicted_robots:
+                logger.info(
+                    "Robots evicted from cache (TTL expired): %s",
+                    evicted_robots,
                 )
             await asyncio.sleep(1.0)
         except asyncio.CancelledError:

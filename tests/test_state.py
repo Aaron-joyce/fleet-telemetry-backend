@@ -104,15 +104,16 @@ async def test_check_and_mark_stale(isolated_state: FleetState):
         isolated_state._robots["robot_002"]["status"] = "offline"
         isolated_state._robots["robot_002"]["last_seen_at"] = time.monotonic() - 10.0
 
-    stale_ids = await isolated_state.check_and_mark_stale(timeout_seconds=5.0)
+    stale_ids, _ = await isolated_state.check_and_mark_stale(timeout_seconds=5.0)
     assert "robot_001" in stale_ids
     assert "robot_002" not in stale_ids  # Already offline, so skipped
 
     r1 = await isolated_state.get_robot("robot_001")
     assert r1["status"] == "offline"
+    assert r1["offline_since"] is not None
 
     # Second check should skip robot_001 since status is now offline
-    stale_ids_2 = await isolated_state.check_and_mark_stale(timeout_seconds=5.0)
+    stale_ids_2, _ = await isolated_state.check_and_mark_stale(timeout_seconds=5.0)
     assert "robot_001" not in stale_ids_2
 
 
@@ -316,6 +317,78 @@ async def test_dropped_frames_counter_accumulates(isolated_state: FleetState):
 
     robot = await isolated_state.get_robot(robot_id)
     assert robot["dropped_frames"] == 3
+
+
+@pytest.mark.asyncio
+async def test_eviction_removes_offline_robot(isolated_state: FleetState):
+    """Test A: Eviction removes offline robot after TTL."""
+    # Force robot_001 offline and set offline_since far in the past
+    async with isolated_state._lock:
+        isolated_state._robots["robot_001"]["status"] = "offline"
+        isolated_state._robots["robot_001"]["offline_since"] = time.monotonic() - 400.0
+
+    _, evicted = await isolated_state.check_and_mark_stale(
+        timeout_seconds=5.0,
+        eviction_ttl_seconds=300.0,
+    )
+
+    assert "robot_001" in evicted
+    assert await isolated_state.get_robot("robot_001") is None
+
+
+@pytest.mark.asyncio
+async def test_eviction_does_not_remove_robot_within_ttl(isolated_state: FleetState):
+    """Test B: Robot within TTL is not evicted."""
+    async with isolated_state._lock:
+        isolated_state._robots["robot_001"]["status"] = "offline"
+        isolated_state._robots["robot_001"]["offline_since"] = time.monotonic() - 60.0  # 60s, TTL=300
+
+    _, evicted = await isolated_state.check_and_mark_stale(
+        timeout_seconds=5.0,
+        eviction_ttl_seconds=300.0,
+    )
+
+    assert "robot_001" not in evicted
+    assert await isolated_state.get_robot("robot_001") is not None
+
+
+@pytest.mark.asyncio
+async def test_evicted_robot_disappears_from_get_all_robots(isolated_state: FleetState):
+    """Test C: Evicted robot disappears from get_all_robots."""
+    all_robots_before = await isolated_state.get_all_robots()
+    count_before = len(all_robots_before)
+    assert any(r["robot_id"] == "robot_001" for r in all_robots_before)
+
+    async with isolated_state._lock:
+        isolated_state._robots["robot_001"]["status"] = "offline"
+        isolated_state._robots["robot_001"]["offline_since"] = time.monotonic() - 400.0
+
+    _, evicted = await isolated_state.check_and_mark_stale(
+        timeout_seconds=5.0,
+        eviction_ttl_seconds=300.0,
+    )
+    assert "robot_001" in evicted
+
+    all_robots_after = await isolated_state.get_all_robots()
+    assert len(all_robots_after) == count_before - 1
+    assert not any(r["robot_id"] == "robot_001" for r in all_robots_after)
+
+
+@pytest.mark.asyncio
+async def test_reconnected_robot_clears_offline_since(isolated_state: FleetState):
+    """Test D: Robot that reconnects clears offline_since."""
+    # Set robot offline
+    async with isolated_state._lock:
+        isolated_state._robots["robot_001"]["status"] = "offline"
+        isolated_state._robots["robot_001"]["offline_since"] = time.monotonic() - 60.0
+
+    # Robot sends a fresh frame with higher t
+    await isolated_state.update_robot("robot_001", {"t": 9999.0, "x": 1.0})
+
+    robot = await isolated_state.get_robot("robot_001")
+    assert robot["offline_since"] is None
+    assert robot["status"] != "offline"
+
 
 
 

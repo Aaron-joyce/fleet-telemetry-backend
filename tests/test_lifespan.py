@@ -108,3 +108,81 @@ async def test_fleet_broadcast_worker_exception_recovery():
         with patch.object(manager, "broadcast", side_effect=fail_then_cancel):
             with patch("asyncio.sleep", new_callable=AsyncMock):
                 await fleet_broadcast_worker()
+
+
+@pytest.mark.asyncio
+async def test_stale_watcher_skips_when_broker_disconnected():
+    """Consumer disconnect: stale_robot_watcher skips check and no robots go offline."""
+    from app.broker_state import broker_state
+    from app.main import stale_robot_watcher
+
+    broker_state.set_connected(False)  # simulate disconnected broker
+
+    with patch.object(
+        fleet_state, "check_and_mark_stale", new_callable=AsyncMock
+    ) as mock_check:
+        with patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError()]):
+            await stale_robot_watcher()
+
+    mock_check.assert_not_called()
+    broker_state.set_connected(True)  # restore
+
+
+@pytest.mark.asyncio
+async def test_stale_watcher_grace_period_skips_after_reconnect():
+    """Test D: Grace period: watcher skips immediately after reconnect."""
+    import time
+    from app.broker_state import broker_state
+    from app.main import stale_robot_watcher
+
+    broker_state.set_connected(True)
+    broker_state._reconnected_at = time.monotonic()  # just now
+
+    with patch.object(
+        fleet_state, "check_and_mark_stale", new_callable=AsyncMock
+    ) as mock_check:
+        with patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError()]):
+            await stale_robot_watcher()
+
+    mock_check.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stale_watcher_resumes_after_grace_period():
+    """Watcher resumes checking after grace period has elapsed."""
+    import time
+    from app.broker_state import broker_state
+    from app.main import stale_robot_watcher, RECONNECT_GRACE_SECONDS
+
+    broker_state.set_connected(True)
+    broker_state._reconnected_at = time.monotonic() - (RECONNECT_GRACE_SECONDS + 1.0)
+
+    with patch.object(
+        fleet_state, "check_and_mark_stale", new_callable=AsyncMock
+    ) as mock_check:
+        mock_check.return_value = []
+        with patch("asyncio.sleep", side_effect=asyncio.CancelledError()):
+            await stale_robot_watcher()
+
+    mock_check.assert_called_once_with(timeout_seconds=5.0)
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_broker_state(async_client):
+    """Test E: Health endpoint returns status and broker connection state."""
+    from app.broker_state import broker_state
+
+    broker_state.set_connected(True)
+    response = await async_client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["broker_connected"] is True
+
+    broker_state.set_connected(False)
+    response_disconnected = await async_client.get("/health")
+    assert response_disconnected.status_code == 200
+    data_disc = response_disconnected.json()
+    assert data_disc["status"] == "ok"
+    assert data_disc["broker_connected"] is False
+

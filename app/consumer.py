@@ -7,6 +7,7 @@ from typing import Any
 import aiomqtt
 from dotenv import load_dotenv
 
+from app.broker_state import broker_state
 from app.state import fleet_state
 
 load_dotenv()
@@ -28,6 +29,7 @@ async def start_consumer() -> None:
             logger.info(f"Starting MQTT consumer, connecting to {MQTT_HOST}:{MQTT_PORT}....")
             async with aiomqtt.Client(hostname=MQTT_HOST, port=MQTT_PORT) as client:
                 await client.subscribe(SUBSCRIBE_TOPIC, qos=1)
+                broker_state.set_connected(True)
                 logger.info(f"Subscribed to {SUBSCRIBE_TOPIC}")
                 reconnect_interval = 1.0
 
@@ -57,13 +59,16 @@ async def start_consumer() -> None:
                         logger.error(f"Unexpected error processing telemetry frame: {e}")
 
         except aiomqtt.MqttError as err:
+            broker_state.set_connected(False)
             logger.warning(f"MQTT connection dropped: {err}. Reconnecting in {reconnect_interval}")
             await asyncio.sleep(reconnect_interval)
             reconnect_interval = min(reconnect_interval*2, max_reconnect_interval)
         except asyncio.CancelledError:
+            broker_state.set_connected(False)
             logger.info("MQTT Shutdown requested")
             break
         except Exception as err:
+            broker_state.set_connected(False)
             logger.error(f"Unexpected error in MQTT consumer {err}")
             await asyncio.sleep(reconnect_interval)
 

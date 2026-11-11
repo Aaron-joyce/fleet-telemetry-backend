@@ -46,6 +46,18 @@ async def reset_global_fleet_state(
     await fleet_state.reset({})
 
 
+@pytest.fixture(autouse=True)
+def reset_global_broker_state():
+    """Reset the global broker_state singleton before and after each test."""
+    from app.broker_state import broker_state
+
+    broker_state.set_connected(True)
+    broker_state._reconnected_at = None
+    yield
+    broker_state.set_connected(False)
+    broker_state._reconnected_at = None
+
+
 @pytest_asyncio.fixture
 async def async_client() -> AsyncGenerator[AsyncClient, None]:
     """Provide an httpx.AsyncClient bound to the FastAPI app without lifespan."""

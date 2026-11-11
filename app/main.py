@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from json import dumps
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 
+from app.broker_state import broker_state
 from app.consumer import start_consumer
 from app.state import fleet_state
 from app.websocket import manager
@@ -13,11 +15,32 @@ from app.websocket import manager
 logger = logging.getLogger("fleet_api")
 logging.basicConfig(level=logging.INFO)
 
+RECONNECT_GRACE_SECONDS = 10.0  # pause stale-marking after broker reconnect
+
 
 async def stale_robot_watcher():
     """Periodically sweeps robots and flags them as offline if silent."""
     while True:
         try:
+            if not broker_state.is_connected:
+                logger.debug(
+                    "Broker disconnected — skipping stale check to avoid false positives."
+                )
+                await asyncio.sleep(1.0)
+                continue
+
+            # Grace period: don't mark stale immediately after a reconnect
+            reconnected_at = broker_state.reconnected_at
+            if (
+                reconnected_at
+                and (time.monotonic() - reconnected_at) < RECONNECT_GRACE_SECONDS
+            ):
+                logger.debug(
+                    "Within reconnect grace period — skipping stale check."
+                )
+                await asyncio.sleep(1.0)
+                continue
+
             offline_robots = await fleet_state.check_and_mark_stale(
                 timeout_seconds=5.0
             )
@@ -71,6 +94,14 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+@app.get("/health")
+async def health() -> dict:
+    return {
+        "status": "ok",
+        "broker_connected": broker_state.is_connected,
+    }
 
 
 @app.get("/robots")

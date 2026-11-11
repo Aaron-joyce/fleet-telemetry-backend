@@ -1,5 +1,6 @@
 import asyncio
 import time
+from unittest.mock import patch
 import pytest
 from app.state import FleetState, load_robots
 
@@ -74,6 +75,18 @@ async def test_partial_field_merges(isolated_state: FleetState):
 
 
 @pytest.mark.asyncio
+async def test_update_robot_explicit_status(isolated_state: FleetState):
+    """Test updating robot with explicit status overrides current status."""
+    robot_id = "robot_001"
+    updated = await isolated_state.update_robot(
+        robot_id, {"t": 120.0, "status": "charging"}
+    )
+    assert updated is True
+    robot = await isolated_state.get_robot(robot_id)
+    assert robot["status"] == "charging"
+
+
+@pytest.mark.asyncio
 async def test_brand_new_robot_id(isolated_state: FleetState):
     """Test updating a brand-new robot ID not present in seed data."""
     new_id = "robot_new_999"
@@ -115,6 +128,38 @@ async def test_check_and_mark_stale(isolated_state: FleetState):
     # Second check should skip robot_001 since status is now offline
     stale_ids_2, _ = await isolated_state.check_and_mark_stale(timeout_seconds=5.0)
     assert "robot_001" not in stale_ids_2
+
+
+@pytest.mark.asyncio
+async def test_check_and_mark_stale_just_under_threshold(isolated_state: FleetState):
+    """Test boundary: robot just under / at threshold (5.0s) is NOT marked offline."""
+    base_time = 1000.0
+    async with isolated_state._lock:
+        # Exactly 5.0s ago (not strictly greater than 5.0s)
+        isolated_state._robots["robot_001"]["last_seen_at"] = base_time - 5.0
+
+    with patch("time.monotonic", return_value=base_time):
+        offline_ids, _ = await isolated_state.check_and_mark_stale(timeout_seconds=5.0)
+
+    assert "robot_001" not in offline_ids
+    robot = await isolated_state.get_robot("robot_001")
+    assert robot["status"] != "offline"
+
+
+@pytest.mark.asyncio
+async def test_check_and_mark_stale_just_over_threshold(isolated_state: FleetState):
+    """Test boundary: robot just over threshold (5.1s) IS marked offline."""
+    base_time = 1000.0
+    async with isolated_state._lock:
+        # 5.1s ago — strictly greater than 5.0s
+        isolated_state._robots["robot_001"]["last_seen_at"] = base_time - 5.1
+
+    with patch("time.monotonic", return_value=base_time):
+        offline_ids, _ = await isolated_state.check_and_mark_stale(timeout_seconds=5.0)
+
+    assert "robot_001" in offline_ids
+    robot = await isolated_state.get_robot("robot_001")
+    assert robot["status"] == "offline"
 
 
 @pytest.mark.asyncio

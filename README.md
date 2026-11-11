@@ -148,11 +148,14 @@ cd fleet-telemetry-backend
 uv sync
 ```
 
-The test suite covers 100% of the `app/` codebase (27 tests across state management, the MQTT consumer, the API routes, and the lifespan tasks):
+The test suite covers 100% of the `app/` codebase:
 
 ```bash
-uv run pytest --cov=app --cov-report=term-missing
+uv run pytest --cov=app --cov-report=term-missing --cov-branch
 ```
+
+> **Note:** Branch coverage is configured as the default in `pyproject.toml`.
+
 
 ---
 

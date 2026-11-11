@@ -67,6 +67,35 @@ async def test_consumer_valid_and_stale_messages():
     assert robot["x"] == 50.0
     assert robot["y"] == 60.0
     assert robot["t"] == 200.0
+    assert robot["dropped_frames"] == 1
+
+
+@pytest.mark.asyncio
+async def test_consumer_reports_stale_frame_as_not_updated():
+    """Test stale frame return value is False when consumed."""
+    valid = json.dumps({"x": 50.0, "y": 60.0, "t": 200.0}).encode()
+    stale = json.dumps({"x": 10.0, "y": 10.0, "t": 200.0}).encode()
+
+    messages = [
+        MockMessage("fleet/telemetry/robot_001", valid),
+        MockMessage("fleet/telemetry/robot_001", stale),
+    ]
+    mock_client = MockMQTTClient(messages)
+    results = []
+
+    original_update = fleet_state.update_robot
+
+    async def recording_update(robot_id, telemetry):
+        result = await original_update(robot_id, telemetry)
+        results.append(result)
+        return result
+
+    with patch("aiomqtt.Client", return_value=mock_client):
+        with patch.object(fleet_state, "update_robot", side_effect=recording_update):
+            await start_consumer()
+
+    assert results == [True, False]  # first accepted, second dropped
+
 
 
 @pytest.mark.asyncio

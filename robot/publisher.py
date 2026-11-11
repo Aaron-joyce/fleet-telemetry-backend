@@ -1,8 +1,8 @@
 import asyncio
 import json
 import os
-from typing import Any
 import uuid
+from typing import Any
 
 import aiomqtt
 from dotenv import load_dotenv
@@ -16,20 +16,28 @@ TOPIC_PREFIX = os.getenv("TOPIC_PREFIX", "fleet/telemetry")
 SESSION_ID = str(uuid.uuid4())
 
 async def start_publisher(robot_id:str, events:list[dict ], multiplier:float=MULTIPLIER, topic:str=TOPIC_PREFIX):
-    async with aiomqtt.Client(MQTT_HOST, MQTT_PORT) as client:
-        prev_t = events[0].get("t", 0.0) if events else 0.0
-        for event in events:
-            curr_t = event.get("t", prev_t)
-            time_delta =  max(0.0, (curr_t-prev_t)/multiplier)
+    prev_t = events[0].get("t", 0.0) if events else 0.0
+    i = 0
+    while i < len(events):
+        try:
+            async with aiomqtt.Client(MQTT_HOST, MQTT_PORT) as client:
+                while i < len(events):
+                    event = events[i]
+                    curr_t = event.get("t", prev_t)
+                    time_delta = max(0.0, (curr_t - prev_t) / multiplier)
 
-            if time_delta>0:
-                await asyncio.sleep(time_delta)
+                    if time_delta > 0:
+                        await asyncio.sleep(time_delta)
 
-            payload = json.dumps({**event, "session_id": SESSION_ID})
-            full_topic = f"{topic}/{robot_id}"
-            await client.publish(full_topic, payload=payload, qos=1)
-            print(f"[{robot_id}] Published to {full_topic}: t={curr_t}")
-            prev_t = curr_t
+                    payload = json.dumps({**event, "session_id": SESSION_ID})
+                    full_topic = f"{topic}/{robot_id}"
+                    await client.publish(full_topic, payload=payload, qos=1)
+                    print(f"[{robot_id}] Published to {full_topic}: t={curr_t}")
+                    prev_t = curr_t
+                    i += 1
+        except (aiomqtt.MqttError, OSError) as err:
+            print(f"[{robot_id}] Connection lost ({err}), retrying in 1s...")
+            await asyncio.sleep(1.0)
 
 
 def run_publisher_sync(

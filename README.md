@@ -1,6 +1,8 @@
 # Real-Time Fleet Telemetry Backend
 
-This is the backend for a fleet management system — it listens to live telemetry from a simulated robot fleet over MQTT, keeps the current state of every robot in memory, and serves that state over both a REST API and a WebSocket stream. Built with FastAPI, `aiomqtt`, and Docker.
+[![CI](https://github.com/Aaron-joyce/fleet-telemetry-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Aaron-joyce/fleet-telemetry-backend/actions/workflows/ci.yml)
+
+This is the backend track of a hiring challenge. It listens to live telemetry from a simulated robot fleet over MQTT, keeps the current state of every robot in memory, and serves that state over both a REST API and a WebSocket stream. Built with FastAPI, `aiomqtt`, and Docker.
 
 ---
 
@@ -32,11 +34,11 @@ flowchart TD
 
 ### A few things worth calling out
 
-- **Thread-safe state store:** The in-memory fleet state uses `asyncio.Lock` with copy-on-read, so reads never block writes and callers can't accidentally mutate internal state.
+- **Coroutine-safe state store:** The in-memory fleet state uses `asyncio.Lock` with copy-on-read. All reads and writes acquire the same lock, which guarantees consistency across concurrent coroutines on one event loop. Callers receive a copy of internal state so they can't accidentally mutate it.
 - **Out-of-order protection:** If a telemetry frame arrives with a timestamp older than or equal to what's already stored, it gets dropped. This keeps the state consistent even when the network reorders packets.
 - **Offline robot detection:** A background task checks every second and marks any robot that hasn't sent a heartbeat in more than 5 seconds as `offline`. This uses `time.monotonic()` so it's immune to system clock adjustments.
 - **Reconnect logic:** If the MQTT broker goes away, the consumer retries with full-jitter exponential backoff — each delay is chosen uniformly at random between 0 and the computed ceiling (1 s, 2 s, 4 s … capped at 30 s), so multiple instances don't reconnect in a thundering herd — rather than hammering the broker or crashing.
-- **x86_64 / SELinux ready:** All Docker services are pinned to `linux/amd64`, and the Mosquitto volume mount uses the `:Z` flag so it works on Fedora/RHEL hosts with SELinux enforcing.
+- **Failure-handling test coverage:** The test suite exercises broker outage recovery (stale marking is suppressed while disconnected and during the reconnect grace window), session-id reboot recovery (a new session resets the timestamp baseline), and the full backoff sequence (caps verified as `[1, 2, 4, 8, 16, 30, 30]` seconds), alongside eviction boundary cases.
 
 ---
 
@@ -101,7 +103,7 @@ curl -s http://localhost:8000/robots | jq
     "battery": 55.8,
     "status": "idle",
     "t": 580.0,
-    "last_seen_at": 9160.49
+    "seconds_since_last_seen": 0.34
   }
 ]
 ```
@@ -143,7 +145,7 @@ asyncio.run(stream())
 
 ```bash
 # Clone and install
-git clone <repo-url>
+git clone https://github.com/Aaron-joyce/fleet-telemetry-backend.git
 cd fleet-telemetry-backend
 uv sync
 ```
@@ -209,13 +211,22 @@ The core backend was written by hand. Here's a breakdown of what was AI-assisted
 
 - **System design:** The overall topology — MQTT as the transport, a single in-memory state store shared by both REST and WebSocket, background tasks for stale detection — was designed and laid out before any code was written.
 - **Business logic:** `app/state.py` (the lock, the dictionary shape, copy-on-read), `app/consumer.py` (the subscribe loop and message routing), and `app/main.py` (route definitions and lifespan task management) were all authored directly.
-- **Resilience details:** The monotonic timestamp rule, the exponential backoff reconnect, and the `last_seen_at` heartbeat timeout were each designed, implemented, and debugged by hand.
+- **Resilience details:** The monotonic timestamp rule, the exponential backoff reconnect, and the `seconds_since_last_seen` heartbeat field were each designed, implemented, and debugged by hand.
 - **Integration fixes:** Worked through a Python 3.14→3.13 environment mismatch, a port conflict, Uvicorn module path scoping, and async task cleanup ordering on shutdown.
 
-### Delegated to AI (Antigravity)
+### Delegated to AI (Antigravity) — initial submission
 
 - **Test scaffolding (`tests/`):** Prompted Antigravity to generate the initial test fixtures across `conftest.py`, `test_api.py`, `test_consumer.py`, `test_state.py`, and `test_lifespan.py`. Reviewed the output to make sure mocking boundaries were correct (no real network calls during tests), checked that edge cases like timestamp rejection were covered, and verified the 100% coverage result.
 - **Container config (`Dockerfile`, `docker-compose.yml`, `.dockerignore`):** Delegated the initial generation of these files, then hardened the output — adding `platform: linux/amd64` for the evaluation environment, `:Z` SELinux flags on volume mounts, healthcheck dependencies between services, and the correct `PYTHONPATH` for the robot module.
+
+### Delegated to AI (Antigravity) — post-submission fixes
+
+After the `submitted` tag, an external code review identified several issues. The post-submission work also used Antigravity:
+
+- **Broker outage false-offline fix:** Prompted Antigravity to audit the stale-watcher logic; it identified that the watcher ran during broker disconnection and would mark the whole fleet offline. Fixed by adding a `broker_state` guard and a 10-second reconnect grace window.
+- **Cache eviction:** Prompted Antigravity to review unbounded memory growth for long-offline robots; added `OFFLINE_EVICTION_TTL_SECONDS` (default 300 s) to `check_and_mark_stale`.
+- **`seconds_since_last_seen` API field:** Antigravity identified that exposing the raw monotonic `last_seen_at` float was meaningless to callers. Replaced with a computed elapsed-time field in `_to_api_view`.
+- **README fixes:** Reviewed by Antigravity — corrected "Thread-safe" → "Coroutine-safe", removed the false "reads never block writes" claim, replaced the x86_64/SELinux bullet with a failure-handling test coverage bullet, added the CI badge, and filled in the real clone URL.
 
 ---
 

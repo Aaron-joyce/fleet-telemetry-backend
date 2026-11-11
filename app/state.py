@@ -139,14 +139,30 @@ class FleetState:
 
         return offline_ids, evicted_ids
 
+    @staticmethod
+    def _to_api_view(robot: dict[str, Any]) -> dict[str, Any]:
+        """Return a copy of the robot dict safe for API consumers.
+
+        Replaces the internal monotonic ``last_seen_at`` value (which is
+        process-relative and meaningless outside this process) with
+        ``seconds_since_last_seen``, a human-readable elapsed-time float
+        rounded to two decimal places.
+        """
+        view = dict(robot)
+        raw = view.pop("last_seen_at")
+        view["seconds_since_last_seen"] = round(
+            max(0.0, time.monotonic() - raw), 2
+        )
+        return view
+
     async def get_all_robots(self) -> list[dict[str, Any]]:
         async with self._lock:
-            return [dict(robot) for robot in self._robots.values()]
+            return [self._to_api_view(robot) for robot in self._robots.values()]
 
     async def get_robot(self, robot_id: str) -> dict[str, Any] | None:
         async with self._lock:
             robot = self._robots.get(robot_id)
-            return dict(robot) if robot else None
+            return self._to_api_view(robot) if robot else None
 
     async def reset(
         self, initial_robots: dict[str, dict[str, Any]] | None = None

@@ -1,8 +1,9 @@
 import json
 from unittest.mock import AsyncMock, patch
+
 import pytest
 
-from robot.publisher import SESSION_ID, start_publisher, run_publisher_sync
+from robot.publisher import SESSION_ID, start_publisher
 
 
 @pytest.mark.asyncio

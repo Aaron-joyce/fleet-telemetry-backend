@@ -1,5 +1,5 @@
-import asyncio
-from typing import AsyncGenerator, Dict, Any
+from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -10,7 +10,7 @@ from app.state import FleetState, fleet_state
 
 
 @pytest.fixture
-def sample_robots_data() -> Dict[str, Dict[str, Any]]:
+def sample_robots_data() -> dict[str, dict[str, Any]]:
     """Return sample robot seed data for testing."""
     return {
         "robot_001": {
@@ -31,15 +31,15 @@ def sample_robots_data() -> Dict[str, Dict[str, Any]]:
 
 
 @pytest.fixture
-def isolated_state(sample_robots_data: Dict[str, Dict[str, Any]]) -> FleetState:
+def isolated_state(sample_robots_data: dict[str, dict[str, Any]]) -> FleetState:
     """Provide a fresh, isolated FleetState instance per test."""
     return FleetState(initial_robots=sample_robots_data)
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def reset_global_fleet_state(
-    sample_robots_data: Dict[str, Dict[str, Any]]
-) -> AsyncGenerator[None, None]:
+    sample_robots_data: dict[str, dict[str, Any]]
+) -> AsyncGenerator[None]:
     """Reset the global fleet_state singleton before and after each test."""
     await fleet_state.reset(sample_robots_data)
     yield
@@ -59,7 +59,7 @@ def reset_global_broker_state():
 
 
 @pytest_asyncio.fixture
-async def async_client() -> AsyncGenerator[AsyncClient, None]:
+async def async_client() -> AsyncGenerator[AsyncClient]:
     """Provide an httpx.AsyncClient bound to the FastAPI app without lifespan."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

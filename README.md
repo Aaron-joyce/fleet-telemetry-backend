@@ -156,6 +156,48 @@ uv run pytest --cov=app --cov-report=term-missing --cov-branch
 
 > **Note:** Branch coverage is configured as the default in `pyproject.toml`.
 
+---
+
+## Known Limitations
+
+The following are deliberate simplifications appropriate for the current scope.
+They become load-bearing if the system grows.
+
+### State is in-process and non-persistent
+All robot state lives in `FleetState._robots` — a plain Python dict inside
+the FastAPI process. If the backend restarts or crashes, the entire state is
+lost. Robots are re-populated from `data/robots.json` defaults and must
+re-publish to restore their last known position.
+
+**Scale implication:** there is no shared state store (Redis, Postgres, etc.),
+so running more than one backend instance would give each instance an
+independent, divergent view of the fleet. Horizontal scaling requires
+externalising state first.
+
+### Single broker is a single point of failure
+Mosquitto runs as a single container with no clustering or persistence
+configured. If it restarts, all in-flight QoS 1 messages in transit are lost
+(the broker's session state is not persisted to disk in the current
+`mosquitto.conf`). The backend reconnects automatically, but messages
+published during the outage are gone.
+
+### Clock-reset / robot reboot vulnerability
+The out-of-order guard compares the device-supplied `t` field. A robot that
+reboots and resets its timestamp counter previously had all subsequent frames
+silently rejected until `t` overtook the stored value. With Spec 01 merged,
+this is handled via `session_id` tracking (a new session resets the timestamp
+baseline). However, within a single session, any backward clock adjustment
+still causes frames to be dropped as out-of-order.
+
+### No authentication or authorisation
+The MQTT broker accepts anonymous connections on port 1883. The REST and
+WebSocket APIs have no authentication. This is intentional for a local
+demo; it must be addressed before any network-exposed deployment.
+
+### Throughput and latency are unmeasured
+No benchmark script is included. The 500 ms broadcast interval is a
+configuration knob, not a measured latency bound. See SYSTEM_DESIGN.md §2
+for a qualitative analysis of where bottlenecks appear at scale.
 
 ---
 

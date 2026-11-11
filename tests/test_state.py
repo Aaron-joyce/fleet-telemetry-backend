@@ -1,7 +1,8 @@
-import asyncio
 import time
 from unittest.mock import patch
+
 import pytest
+
 from app.state import FleetState, load_robots
 
 
@@ -206,6 +207,7 @@ def test_module_load_robots_file_not_found_fallback():
     """Test module import fallback when load_robots raises FileNotFoundError at module level."""
     import importlib
     from unittest.mock import patch
+
     import app.state
 
     with patch("pathlib.Path.is_file", return_value=False):

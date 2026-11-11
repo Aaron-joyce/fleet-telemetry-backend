@@ -1,6 +1,6 @@
-import asyncio
+from unittest.mock import AsyncMock
+
 import pytest
-from unittest.mock import AsyncMock, patch
 from fastapi import WebSocket
 
 from app.websocket import ConnectionManager

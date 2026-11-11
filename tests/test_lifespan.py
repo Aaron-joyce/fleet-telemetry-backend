@@ -1,8 +1,9 @@
 import asyncio
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
-from app.main import lifespan, stale_robot_watcher, app
+from app.main import app, lifespan, stale_robot_watcher
 from app.state import fleet_state
 
 
@@ -58,10 +59,9 @@ async def test_stale_robot_watcher_exception_handling():
 
     with patch.object(
         fleet_state, "check_and_mark_stale", side_effect=mock_check_with_error
-    ):
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            await stale_robot_watcher()
-            mock_sleep.assert_called_once_with(1.0)
+    ), patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await stale_robot_watcher()
+        mock_sleep.assert_called_once_with(1.0)
 
 
 @pytest.mark.asyncio
@@ -138,6 +138,7 @@ async def test_stale_watcher_skips_when_broker_disconnected():
 async def test_stale_watcher_grace_period_skips_after_reconnect():
     """Test D: Grace period: watcher skips immediately after reconnect."""
     import time
+
     from app.broker_state import broker_state
     from app.main import stale_robot_watcher
 
@@ -157,8 +158,9 @@ async def test_stale_watcher_grace_period_skips_after_reconnect():
 async def test_stale_watcher_resumes_after_grace_period():
     """Watcher resumes checking after grace period has elapsed."""
     import time
+
     from app.broker_state import broker_state
-    from app.main import stale_robot_watcher, RECONNECT_GRACE_SECONDS
+    from app.main import RECONNECT_GRACE_SECONDS, stale_robot_watcher
 
     broker_state.set_connected(True)
     broker_state._reconnected_at = time.monotonic() - (RECONNECT_GRACE_SECONDS + 1.0)

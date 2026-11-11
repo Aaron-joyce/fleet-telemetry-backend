@@ -1,11 +1,11 @@
-import pytest
 from unittest.mock import AsyncMock, patch
-from httpx import AsyncClient
-from fastapi.testclient import TestClient
+
+import pytest
 from fastapi import WebSocketDisconnect
+from fastapi.testclient import TestClient
+from httpx import AsyncClient
 
 from app.main import app, websocket_fleet_endpoint
-from app.state import fleet_state
 
 
 @pytest.mark.asyncio

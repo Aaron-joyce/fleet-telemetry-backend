@@ -1,7 +1,8 @@
 import asyncio
 import json
 import random
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import aiomqtt
 import pytest
 
@@ -119,11 +120,10 @@ async def test_consumer_unexpected_processing_exception():
     messages = [MockMessage("fleet/telemetry/robot_001", valid_payload)]
     mock_client = MockMQTTClient(messages)
 
-    with patch("aiomqtt.Client", return_value=mock_client):
-        with patch.object(
-            fleet_state, "update_robot", side_effect=RuntimeError("State update error")
-        ):
-            await start_consumer()
+    with patch("aiomqtt.Client", return_value=mock_client), patch.object(
+        fleet_state, "update_robot", side_effect=RuntimeError("State update error")
+    ):
+        await start_consumer()
 
 
 @pytest.mark.asyncio

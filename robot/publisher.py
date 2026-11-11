@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from typing import Any
+import uuid
 
 import aiomqtt
 from dotenv import load_dotenv
@@ -12,6 +13,7 @@ MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 MULTIPLIER = float(os.getenv("MULTIPLIER", 1.0))
 TOPIC_PREFIX = os.getenv("TOPIC_PREFIX", "fleet/telemetry")
+SESSION_ID = str(uuid.uuid4())
 
 async def start_publisher(robot_id:str, events:list[dict ], multiplier:float=MULTIPLIER, topic:str=TOPIC_PREFIX):
     async with aiomqtt.Client(MQTT_HOST, MQTT_PORT) as client:
@@ -23,7 +25,7 @@ async def start_publisher(robot_id:str, events:list[dict ], multiplier:float=MUL
             if time_delta>0:
                 await asyncio.sleep(time_delta)
 
-            payload = json.dumps(event)
+            payload = json.dumps({**event, "session_id": SESSION_ID})
             full_topic = f"{topic}/{robot_id}"
             await client.publish(full_topic, payload=payload, qos=1)
             print(f"[{robot_id}] Published to {full_topic}: t={curr_t}")

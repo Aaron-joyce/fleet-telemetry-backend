@@ -160,3 +160,37 @@ def test_consumer_main_block_keyboard_interrupt():
     with patch("asyncio.run", side_effect=KeyboardInterrupt):
         runpy.run_module("app.consumer", run_name="__main__")
 
+
+@pytest.mark.asyncio
+async def test_consumer_reboot_and_recovery():
+    """Test E: Consumer integration: robot reboots and keeps reporting."""
+    frame1 = json.dumps(
+        {"x": 10.0, "y": 20.0, "t": 500.0, "session_id": "s1"}
+    ).encode("utf-8")
+    frame2 = json.dumps(
+        {"x": 11.0, "y": 21.0, "t": 100.0, "session_id": "s1"}
+    ).encode("utf-8")
+    frame3 = json.dumps(
+        {"x": 12.0, "y": 22.0, "t": 5.0, "session_id": "s2"}
+    ).encode("utf-8")
+
+    messages = [
+        MockMessage("fleet/telemetry/robot_001", frame1),
+        MockMessage("fleet/telemetry/robot_001", frame2),
+        MockMessage("fleet/telemetry/robot_001", frame3),
+    ]
+
+    mock_client = MockMQTTClient(messages)
+
+    with patch("aiomqtt.Client", return_value=mock_client):
+        await start_consumer()
+
+    robot = await fleet_state.get_robot("robot_001")
+    assert robot is not None
+    assert robot["t"] == 5.0
+    assert robot["session_id"] == "s2"
+    assert robot["x"] == 12.0
+    assert robot["y"] == 22.0
+    assert robot["dropped_frames"] == 1
+
+

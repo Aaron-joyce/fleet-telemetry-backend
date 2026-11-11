@@ -37,10 +37,20 @@ async def start_consumer() -> None:
                         payload:dict[str, Any] = json.loads(message.payload.decode("utf-8"))
 
                         updated = await fleet_state.update_robot(robot_id=robot_id, telemetry=payload)
+                        incoming_session = payload.get("session_id")
                         if updated:
-                            logger.debug(f"{robot_id} Telemetry updated= {round(payload.get('t', 0.0),ndigits=2)}")
+                            if incoming_session:
+                                logger.debug(
+                                    f"{robot_id} frame accepted (session={incoming_session}, t={round(payload.get('t', 0.0), 2)})"
+                                )
+                            else:
+                                logger.debug(
+                                    f"{robot_id} Telemetry updated t={round(payload.get('t', 0.0), 2)}"
+                                )
                         else:
-                            logger.debug(f"{robot_id} Dropped Stale/out-of-order data.")
+                            logger.debug(
+                                f"{robot_id} Dropped stale/out-of-order frame (session={incoming_session}, t={round(payload.get('t', 0.0), 2)})"
+                            )
                     except (json.JSONDecodeError, UnicodeDecodeError) as err:
                         logger.warning(f"Malformed message on topic {message.topic}: {err}")
                     except Exception as e:

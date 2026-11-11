@@ -39,21 +39,31 @@ class FleetState:
                     "status": meta.get("status", "idle"),
                     "t": float(meta.get("t", 0.0)),
                     "last_seen_at": now,
+                    "session_id": meta.get("session_id"),
+                    "dropped_frames": int(meta.get("dropped_frames", 0)),
                 }
 
     async def update_robot(
         self, robot_id: str, telemetry: dict[str, Any]
     ) -> bool:
         incoming_t = float(telemetry.get("t", 0.0))
+        incoming_session = telemetry.get("session_id")
         now = time.monotonic()
 
         async with self._lock:
             current = self._robots.get(robot_id)
 
-            if current and incoming_t <= current.get("t", 0.0):
-                return False
-
             if current:
+                session_changed = (
+                    incoming_session is not None
+                    and incoming_session != current.get("session_id")
+                )
+
+                if not session_changed and incoming_t <= current.get("t", 0.0):
+                    current["dropped_frames"] = current.get("dropped_frames", 0) + 1
+                    return False
+
+                # Accept: either newer t within same session, or new session entirely
                 current.update(
                     {
                         "x": float(telemetry.get("x", current["x"])),
@@ -64,9 +74,11 @@ class FleetState:
                         "status": telemetry.get("status", current["status"]),
                         "t": incoming_t,
                         "last_seen_at": now,
+                        "session_id": incoming_session,
                     }
                 )
             else:
+                # First-ever frame for this robot
                 self._robots[robot_id] = {
                     "robot_id": robot_id,
                     "x": float(telemetry.get("x", 0.0)),
@@ -75,6 +87,8 @@ class FleetState:
                     "status": telemetry.get("status", "active"),
                     "t": incoming_t,
                     "last_seen_at": now,
+                    "session_id": incoming_session,
+                    "dropped_frames": 0,
                 }
             return True
 
@@ -120,6 +134,8 @@ class FleetState:
                         "status": meta.get("status", "idle"),
                         "t": float(meta.get("t", 0.0)),
                         "last_seen_at": now,
+                        "session_id": meta.get("session_id"),
+                        "dropped_frames": int(meta.get("dropped_frames", 0)),
                     }
 
 

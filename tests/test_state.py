@@ -170,3 +170,152 @@ def test_module_load_robots_file_not_found_fallback():
     importlib.reload(app.state)
 
 
+@pytest.mark.asyncio
+async def test_session_normal_ordering_enforced(isolated_state: FleetState):
+    """Test A: Normal session, ordering still enforced within session."""
+    robot_id = "robot_session_a"
+    # send t=100 session="abc" -> accepted
+    res1 = await isolated_state.update_robot(
+        robot_id, {"t": 100.0, "session_id": "abc", "x": 1.0}
+    )
+    assert res1 is True
+    r1 = await isolated_state.get_robot(robot_id)
+    assert r1["t"] == 100.0
+    assert r1["session_id"] == "abc"
+    assert r1["dropped_frames"] == 0
+
+    # send t=90 session="abc" -> dropped, dropped_frames == 1
+    res2 = await isolated_state.update_robot(
+        robot_id, {"t": 90.0, "session_id": "abc", "x": 2.0}
+    )
+    assert res2 is False
+    r2 = await isolated_state.get_robot(robot_id)
+    assert r2["t"] == 100.0
+    assert r2["x"] == 1.0
+    assert r2["dropped_frames"] == 1
+
+    # send t=110 session="abc" -> accepted
+    res3 = await isolated_state.update_robot(
+        robot_id, {"t": 110.0, "session_id": "abc", "x": 3.0}
+    )
+    assert res3 is True
+    r3 = await isolated_state.get_robot(robot_id)
+    assert r3["t"] == 110.0
+    assert r3["x"] == 3.0
+    assert r3["dropped_frames"] == 1
+
+
+@pytest.mark.asyncio
+async def test_session_reset_recovers_frozen_robot(isolated_state: FleetState):
+    """Test B: Session reset recovers a frozen robot after reboot."""
+    robot_id = "robot_session_b"
+    # send t=500 session="abc" -> accepted
+    assert (
+        await isolated_state.update_robot(
+            robot_id, {"t": 500.0, "session_id": "abc", "x": 10.0, "y": 20.0}
+        )
+        is True
+    )
+
+    # send t=10 session="abc" -> dropped (old session, stale t)
+    assert (
+        await isolated_state.update_robot(
+            robot_id, {"t": 10.0, "session_id": "abc", "x": 15.0, "y": 25.0}
+        )
+        is False
+    )
+    r_stale = await isolated_state.get_robot(robot_id)
+    assert r_stale["dropped_frames"] == 1
+    assert r_stale["t"] == 500.0
+
+    # send t=10 session="xyz" -> accepted (new session resets baseline)
+    assert (
+        await isolated_state.update_robot(
+            robot_id, {"t": 10.0, "session_id": "xyz", "x": 30.0, "y": 40.0}
+        )
+        is True
+    )
+    r_reset = await isolated_state.get_robot(robot_id)
+    assert r_reset["t"] == 10.0
+    assert r_reset["x"] == 30.0
+    assert r_reset["y"] == 40.0
+    assert r_reset["session_id"] == "xyz"
+
+    # send t=11 session="xyz" -> accepted
+    assert (
+        await isolated_state.update_robot(
+            robot_id, {"t": 11.0, "session_id": "xyz", "x": 31.0, "y": 41.0}
+        )
+        is True
+    )
+    r_next = await isolated_state.get_robot(robot_id)
+    assert r_next["t"] == 11.0
+
+    # send t=10 session="xyz" -> dropped
+    assert (
+        await isolated_state.update_robot(
+            robot_id, {"t": 10.0, "session_id": "xyz", "x": 32.0, "y": 42.0}
+        )
+        is False
+    )
+    r_final = await isolated_state.get_robot(robot_id)
+    assert r_final["t"] == 11.0
+    assert r_final["session_id"] == "xyz"
+    assert r_final["dropped_frames"] == 2
+
+
+@pytest.mark.asyncio
+async def test_no_session_id_backward_compatibility(isolated_state: FleetState):
+    """Test C: Backward compatibility when session_id is absent."""
+    robot_id = "robot_session_c"
+    # send t=100 no session_id -> accepted
+    assert await isolated_state.update_robot(robot_id, {"t": 100.0, "x": 5.0}) is True
+    r1 = await isolated_state.get_robot(robot_id)
+    assert r1["t"] == 100.0
+    assert r1["session_id"] is None
+    assert r1["dropped_frames"] == 0
+
+    # send t=90 no session_id -> dropped, dropped_frames == 1
+    assert await isolated_state.update_robot(robot_id, {"t": 90.0, "x": 6.0}) is False
+    r2 = await isolated_state.get_robot(robot_id)
+    assert r2["t"] == 100.0
+    assert r2["x"] == 5.0
+    assert r2["dropped_frames"] == 1
+
+
+@pytest.mark.asyncio
+async def test_dropped_frames_counter_accumulates(isolated_state: FleetState):
+    """Test D: dropped_frames counter accumulates across multiple stale frames."""
+    robot_id = "robot_session_d"
+    assert (
+        await isolated_state.update_robot(
+            robot_id, {"t": 100.0, "session_id": "s1"}
+        )
+        is True
+    )
+
+    # Send 3 stale frames within the same session
+    assert (
+        await isolated_state.update_robot(
+            robot_id, {"t": 90.0, "session_id": "s1"}
+        )
+        is False
+    )
+    assert (
+        await isolated_state.update_robot(
+            robot_id, {"t": 80.0, "session_id": "s1"}
+        )
+        is False
+    )
+    assert (
+        await isolated_state.update_robot(
+            robot_id, {"t": 100.0, "session_id": "s1"}
+        )
+        is False
+    )
+
+    robot = await isolated_state.get_robot(robot_id)
+    assert robot["dropped_frames"] == 3
+
+
+

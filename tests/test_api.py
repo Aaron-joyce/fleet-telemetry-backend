@@ -29,6 +29,8 @@ async def test_get_robot_valid_id(async_client: AsyncClient):
     assert data["robot_id"] == "robot_001"
     assert data["x"] == 10.0
     assert data["battery"] == 85.0
+    assert "dropped_frames" in data
+    assert "session_id" in data
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 import asyncio
 import json
-from unittest.mock import patch, AsyncMock
+import random
+from unittest.mock import patch, AsyncMock, MagicMock
 import aiomqtt
 import pytest
 
@@ -115,7 +116,9 @@ async def test_consumer_mqtt_error_reconnect():
     with patch("aiomqtt.Client", return_value=ExceptionClient()):
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             await start_consumer()
-            mock_sleep.assert_called_once_with(1.0)
+            assert mock_sleep.call_count == 1
+            sleep_val = mock_sleep.call_args[0][0]
+            assert 0.0 <= sleep_val <= 1.0
 
 
 @pytest.mark.asyncio
@@ -137,7 +140,9 @@ async def test_consumer_unexpected_outer_exception():
     with patch("aiomqtt.Client", return_value=ExceptionClient()):
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             await start_consumer()
-            mock_sleep.assert_called_once_with(1.0)
+            assert mock_sleep.call_count == 1
+            sleep_val = mock_sleep.call_args[0][0]
+            assert 0.0 <= sleep_val <= 1.0
 
 
 @pytest.mark.asyncio
@@ -192,5 +197,121 @@ async def test_consumer_reboot_and_recovery():
     assert robot["x"] == 12.0
     assert robot["y"] == 22.0
     assert robot["dropped_frames"] == 1
+
+
+@pytest.mark.asyncio
+async def test_consumer_reconnect_uses_jitter_first_interval():
+    """Test A: Jitter is applied; asyncio.sleep is called with expected jittered value."""
+    rng = random.Random(42)
+    expected_sleep = rng.uniform(0, 1.0)  # pre-compute with same seed
+
+    rng2 = random.Random(42)  # same seed for the actual call
+
+    call_count = 0
+
+    class FailOnceThenCancel:
+        async def __aenter__(self):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise aiomqtt.MqttError("dropped")
+            raise asyncio.CancelledError()
+
+        async def __aexit__(self, *a):
+            pass
+
+    with patch("aiomqtt.Client", return_value=FailOnceThenCancel()):
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await start_consumer(_rng=rng2)
+            mock_sleep.assert_called_once_with(pytest.approx(expected_sleep))
+
+
+@pytest.mark.asyncio
+async def test_consumer_backoff_sequence_caps_at_30():
+    """Test B: Full backoff sequence: intervals double up to cap 30.0."""
+    caps = []
+
+    class AlwaysFail:
+        count = 0
+
+        async def __aenter__(self):
+            AlwaysFail.count += 1
+            if AlwaysFail.count > 7:
+                raise asyncio.CancelledError()
+            raise aiomqtt.MqttError("boom")
+
+        async def __aexit__(self, *a):
+            pass
+
+    rng = MagicMock()
+    rng.uniform.side_effect = lambda lo, hi: (caps.append(hi), hi)[1]
+
+    with patch("aiomqtt.Client", return_value=AlwaysFail()):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await start_consumer(_rng=rng)
+
+    assert caps == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+
+
+@pytest.mark.asyncio
+async def test_consumer_backoff_resets_after_success():
+    """Test C: Backoff resets to 1.0 after successful connection."""
+    caps = []
+    call_count = 0
+
+    class FailSucceedFailClient:
+        def __init__(self):
+            self.messages = MockMessages([aiomqtt.MqttError("stream drop")])
+
+        async def subscribe(self, topic, qos=1):
+            pass
+
+        async def __aenter__(self):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise aiomqtt.MqttError("fail 1")
+            elif call_count == 2:
+                return self
+            raise asyncio.CancelledError()
+
+        async def __aexit__(self, *a):
+            pass
+
+    rng = MagicMock()
+    rng.uniform.side_effect = lambda lo, hi: (caps.append(hi), hi)[1]
+
+    with patch("aiomqtt.Client", return_value=FailSucceedFailClient()):
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await start_consumer(_rng=rng)
+
+    assert caps == [1.0, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_consumer_unexpected_exception_uses_jitter():
+    """Test D: Unexpected exceptions also receive jitter."""
+    call_count = 0
+
+    class ExceptionClient:
+        async def __aenter__(self):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("Unexpected error")
+            raise asyncio.CancelledError()
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    rng = MagicMock()
+    rng.uniform.return_value = 0.42
+
+    with patch("aiomqtt.Client", return_value=ExceptionClient()):
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await start_consumer(_rng=rng)
+            rng.uniform.assert_called_once_with(0, 1.0)
+            mock_sleep.assert_called_once_with(0.42)
+
 
 

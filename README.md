@@ -35,7 +35,7 @@ flowchart TD
 - **Thread-safe state store:** The in-memory fleet state uses `asyncio.Lock` with copy-on-read, so reads never block writes and callers can't accidentally mutate internal state.
 - **Out-of-order protection:** If a telemetry frame arrives with a timestamp older than or equal to what's already stored, it gets dropped. This keeps the state consistent even when the network reorders packets.
 - **Offline robot detection:** A background task checks every second and marks any robot that hasn't sent a heartbeat in more than 5 seconds as `offline`. This uses `time.monotonic()` so it's immune to system clock adjustments.
-- **Reconnect logic:** If the MQTT broker goes away, the consumer retries with exponential backoff — starting at 1 second and capping at 30 seconds — rather than hammering the broker or crashing.
+- **Reconnect logic:** If the MQTT broker goes away, the consumer retries with full-jitter exponential backoff — each delay is chosen uniformly at random between 0 and the computed ceiling (1 s, 2 s, 4 s … capped at 30 s), so multiple instances don't reconnect in a thundering herd — rather than hammering the broker or crashing.
 - **x86_64 / SELinux ready:** All Docker services are pinned to `linux/amd64`, and the Mosquitto volume mount uses the `:Z` flag so it works on Fedora/RHEL hosts with SELinux enforcing.
 
 ---

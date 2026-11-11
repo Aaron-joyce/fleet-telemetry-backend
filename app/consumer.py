@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import random as _random_module
 from typing import Any
 
 import aiomqtt
@@ -19,10 +20,13 @@ SUBSCRIBE_TOPIC = f"{TOPIC_PREFIX}/+"
 logger = logging.getLogger("fleet_consumer")
 logging.basicConfig(level=logging.DEBUG)
 
-async def start_consumer() -> None:
+async def start_consumer(
+    _rng: _random_module.Random | None = None,
+) -> None:
+    rng = _rng or _random_module.Random()  # fresh unseeded instance per call
 
     reconnect_interval = 1.0
-    max_reconnect_interval = 30
+    max_reconnect_interval = 30.0
 
     while True:
         try:
@@ -30,8 +34,8 @@ async def start_consumer() -> None:
             async with aiomqtt.Client(hostname=MQTT_HOST, port=MQTT_PORT) as client:
                 await client.subscribe(SUBSCRIBE_TOPIC, qos=1)
                 broker_state.set_connected(True)
+                reconnect_interval = 1.0  # reset on success
                 logger.info(f"Subscribed to {SUBSCRIBE_TOPIC}")
-                reconnect_interval = 1.0
 
                 async for message in client.messages:
                     try:
@@ -60,17 +64,22 @@ async def start_consumer() -> None:
 
         except aiomqtt.MqttError as err:
             broker_state.set_connected(False)
-            logger.warning(f"MQTT connection dropped: {err}. Reconnecting in {reconnect_interval}")
-            await asyncio.sleep(reconnect_interval)
-            reconnect_interval = min(reconnect_interval*2, max_reconnect_interval)
+            jittered = rng.uniform(0, reconnect_interval)  # full jitter
+            logger.warning(
+                f"MQTT connection dropped: {err}. "
+                f"Reconnecting in {jittered:.2f}s (cap={reconnect_interval:.1f}s)"
+            )
+            await asyncio.sleep(jittered)
+            reconnect_interval = min(reconnect_interval * 2, max_reconnect_interval)
         except asyncio.CancelledError:
             broker_state.set_connected(False)
             logger.info("MQTT Shutdown requested")
             break
         except Exception as err:
             broker_state.set_connected(False)
+            jittered = rng.uniform(0, reconnect_interval)
             logger.error(f"Unexpected error in MQTT consumer {err}")
-            await asyncio.sleep(reconnect_interval)
+            await asyncio.sleep(jittered)
 
 if __name__=="__main__":
     try:
